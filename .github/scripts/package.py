@@ -25,8 +25,8 @@ for lib in libs:
     elif name.startswith("linux"):
         run(["ldd", p])
     else:
-        objdump = glob.glob(os.path.join(src, "third_party", "llvm-build", "*", "bin", "llvm-objdump*"))
-        run([objdump[0], "-p", p])
+        dumpbin = glob.glob("C:/Program Files/Microsoft Visual Studio/2022/*/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe")
+        run([dumpbin[0], "/dependents", p])
 print("files in out/Release:", sorted(f for f in os.listdir(out) if f.endswith((".dll", ".so", ".dylib", ".json"))))
 if name.startswith("win32"):
     print("d3dcompiler_47.dll produced:", os.path.exists(os.path.join(out, "d3dcompiler_47.dll")))
