@@ -52,7 +52,6 @@ jobs:
     env:
       ANGLE_SHA: ${{ needs.resolve.outputs.sha }}
       DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
-      DEPOT_TOOLS_UPDATE: "0"
       GYP_MSVS_VERSION: "2022"
     steps:
       - uses: actions/checkout@v4
