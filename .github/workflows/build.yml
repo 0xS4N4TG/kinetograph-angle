@@ -81,6 +81,11 @@ jobs:
           gclient$B sync --no-history --nohooks -j 8
           cd angle && git rev-parse HEAD
 
+      - name: Windows SDK pinned by ANGLE
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./ci/.github/scripts/install-win-sdk.ps1 -Source "$PWD/work/angle"
+
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
