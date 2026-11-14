@@ -1,0 +1,51 @@
+name: update
+
+# Keeps main a fast-forward copy of google/angle main, and starts a draft-release build for Chrome Stable's ANGLE.
+on:
+  schedule:
+    - cron: "17 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Fast-forward main from google/angle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # merge-upstream only fast-forwards; it answers 409 if main has diverged, and the job then fails.
+          gh api -X POST "repos/$GH_REPO/merge-upstream" -f branch=main | tee out.json
+          echo "sync: $(jq -r .message out.json)" >> "$GITHUB_STEP_SUMMARY"
+
+  stable:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Build Chrome Stable's ANGLE branch if it has no release yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version=$(curl -fsS https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json \
+            | jq -r .channels.Stable.version)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad version '$version'"; exit 1; }
+          branch="chromium/$(echo "$version" | cut -d. -f3)"
+          sha=$(git ls-remote https://chromium.googlesource.com/angle/angle "refs/heads/$branch" | cut -f1)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "no ANGLE branch $branch"; exit 1; }
+          tag="angle-${sha:0:10}"
+          echo "Chrome Stable $version -> $branch -> $sha -> $tag"
+          if gh release list --limit 200 --json tagName --jq '.[].tagName' | grep -qx "$tag"; then
+            echo "Release $tag already exists (Chrome $version, $branch): nothing to do." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            gh workflow run build.yml --ref ci -f angle_ref="$sha" -f release=true
+            echo "Started build.yml for $sha (Chrome $version, $branch), draft release $tag." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
