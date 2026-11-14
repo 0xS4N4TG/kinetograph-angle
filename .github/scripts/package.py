@@ -36,7 +36,6 @@ stage = os.path.join("stage", f"angle-{short}-{name}")
 os.makedirs(stage, exist_ok=True)
 for lib in libs:
     shutil.copy(os.path.join(out, lib), stage)
-shutil.copy("ci/LICENSE" if os.path.exists("ci/LICENSE") else os.path.join(src, "LICENSE"), os.path.join(stage, "LICENSE"))
 shutil.copy(os.path.join(src, "LICENSE"), os.path.join(stage, "LICENSE"))
 with open(os.path.join(stage, "SOURCE.txt"), "w") as f:
     f.write(f"ANGLE commit: {sha}\nasked for: {os.environ['ANGLE_REF']}\nrunner image: {os.environ['IMAGE']}\n"
