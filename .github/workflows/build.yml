@@ -1,0 +1,155 @@
+name: build
+
+# Builds libEGL and libGLESv2 from ANGLE (https://chromium.googlesource.com/angle/angle) for three platforms.
+on:
+  workflow_dispatch:
+    inputs:
+      angle_ref:
+        description: ANGLE commit SHA, or a branch such as chromium/8103
+        required: true
+        type: string
+      release:
+        description: Create a DRAFT release with the archives
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-22.04
+    outputs:
+      sha: ${{ steps.r.outputs.sha }}
+    steps:
+      - id: r
+        env:
+          ANGLE_REF: ${{ inputs.angle_ref }}
+        run: |
+          if [[ "$ANGLE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            sha="$ANGLE_REF"
+          else
+            sha=$(git ls-remote https://chromium.googlesource.com/angle/angle "refs/heads/$ANGLE_REF" | cut -f1)
+          fi
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "cannot resolve '$ANGLE_REF'"; exit 1; }
+          echo "ANGLE $ANGLE_REF = $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, name: darwin-arm64, cpu: arm64, ext: tar.gz }
+          - { os: ubuntu-22.04, name: linux-x64, cpu: x64, ext: tar.gz }
+          - { os: windows-2022, name: win32-x64, cpu: x64, ext: zip }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    env:
+      ANGLE_SHA: ${{ needs.resolve.outputs.sha }}
+      DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
+      DEPOT_TOOLS_UPDATE: "0"
+      GYP_MSVS_VERSION: "2022"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          path: ci
+
+      - name: depot_tools
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$RUNNER_TEMP/depot_tools"
+          echo "$RUNNER_TEMP/depot_tools" >> "$GITHUB_PATH"
+
+      - name: Fetch ANGLE (gclient)
+        run: |
+          mkdir work && cd work
+          cat > .gclient <<EOT
+          solutions = [{
+            "name": "angle",
+            "url": "https://chromium.googlesource.com/angle/angle.git@$ANGLE_SHA",
+            "deps_file": "DEPS",
+            "managed": False,
+            "custom_deps": {},
+            "custom_vars": {},
+          }]
+          EOT
+          gclient sync --no-history --nohooks -j 8
+          cd angle && git rev-parse HEAD
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          cd work/angle
+          sudo ./build/install-build-deps.sh --no-prompt --no-arm --no-chromeos-fonts --no-nacl
+
+      - name: gclient hooks (toolchain, sysroot)
+        run: cd work && gclient runhooks
+
+      - name: gn gen
+        env:
+          CPU: ${{ matrix.cpu }}
+          OS_NAME: ${{ matrix.name }}
+        run: |
+          cd work/angle
+          common='is_debug=false is_component_build=false symbol_level=0 target_cpu="'$CPU'"
+            angle_build_tests=false angle_enable_wgpu=false angle_enable_swiftshader=false
+            angle_enable_null=false angle_enable_cl=false angle_enable_trace=false
+            angle_enable_renderdoc=false angle_enable_vulkan_validation_layers=false
+            angle_enable_vulkan_api_dump_layer=false build_angle_deqp_tests=false'
+          case "$OS_NAME" in
+            darwin-*) extra='angle_enable_metal=true angle_enable_gl=false angle_enable_vulkan=false' ;;
+            win32-*)  extra='angle_enable_d3d11=true angle_enable_d3d9=false angle_enable_gl=false angle_enable_vulkan=false' ;;
+            linux-*)  extra='angle_enable_vulkan=true angle_enable_gl=false use_ozone=false angle_use_x11=false angle_use_wayland=false' ;;
+          esac
+          args=$(echo $common $extra)
+          echo "$args" > "$RUNNER_TEMP/gn-args.txt"
+          gn gen out/Release --args="$args"
+          gn args out/Release --list --short | grep -E '^(angle_enable|target_cpu|is_|symbol_level)' | head -40
+
+      - name: Build libEGL and libGLESv2
+        run: cd work/angle && autoninja -C out/Release libEGL libGLESv2
+
+      - name: Package
+        env:
+          ANGLE_REF: ${{ inputs.angle_ref }}
+          OS_NAME: ${{ matrix.name }}
+          EXT: ${{ matrix.ext }}
+          IMAGE: ${{ matrix.os }}
+        run: python3 ci/.github/scripts/package.py work/angle "$RUNNER_TEMP/gn-args.txt" dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: angle-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: inputs.release
+    needs: [resolve, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          REF: ${{ inputs.angle_ref }}
+        run: |
+          cd dist
+          short="${SHA:0:10}"
+          cat SHA256SUMS-* | sort -k2 > SHA256SUMS
+          rm SHA256SUMS-*
+          cat SHA256SUMS
+          gh release create "angle-$short" --draft --target "$GITHUB_SHA" \
+            --title "ANGLE $short" --notes "ANGLE $SHA (asked for: $REF). Built by this repository's build workflow." \
+            *.tar.gz *.zip SHA256SUMS
