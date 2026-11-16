@@ -12,6 +12,10 @@ on:
         description: Create a DRAFT release with the archives
         type: boolean
         default: false
+      probe:
+        description: Stop after gn gen and print what the build files say about SwiftShader and the Vulkan loader
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -102,13 +106,13 @@ jobs:
         run: |
           cd work/angle
           common='is_debug=false is_component_build=false symbol_level=0 target_cpu="'$CPU'"
-            angle_build_tests=false angle_enable_wgpu=false angle_enable_swiftshader=false
+            angle_build_tests=false angle_enable_wgpu=false angle_enable_swiftshader=true
             angle_enable_null=false angle_enable_cl=false angle_enable_trace=false
             angle_enable_renderdoc=false angle_enable_vulkan_validation_layers=false
             angle_enable_vulkan_api_dump_layer=false build_angle_deqp_tests=false'
           case "$OS_NAME" in
-            darwin-*) extra='angle_enable_metal=true angle_enable_gl=false angle_enable_vulkan=false' ;;
-            win32-*)  extra='angle_enable_d3d11=true angle_enable_d3d9=false angle_enable_gl=false angle_enable_vulkan=false' ;;
+            darwin-*) extra='angle_enable_metal=true angle_enable_gl=false angle_enable_vulkan=true' ;;
+            win32-*)  extra='angle_enable_d3d11=true angle_enable_d3d9=false angle_enable_gl=false angle_enable_vulkan=true' ;;
             linux-*)  extra='angle_enable_vulkan=true angle_enable_gl=false use_ozone=false angle_use_x11=false angle_use_wayland=false' ;;
           esac
           args=$(echo $common $extra)
@@ -116,10 +120,16 @@ jobs:
           gn$B gen out/Release --args="$args"
           gn$B args out/Release --list --short | grep -E '^(angle_enable|target_cpu|is_|symbol_level)' | head -40
 
+      - name: Probe the build files
+        if: inputs.probe
+        run: python3 ci/.github/scripts/probe.py work/angle out/Release
+
       - name: Build libEGL and libGLESv2
+        if: '!inputs.probe'
         run: cd work/angle && autoninja$B -C out/Release libEGL libGLESv2
 
       - name: Package
+        if: '!inputs.probe'
         env:
           ANGLE_REF: ${{ inputs.angle_ref }}
           OS_NAME: ${{ matrix.name }}
@@ -128,13 +138,14 @@ jobs:
         run: python3 ci/.github/scripts/package.py work/angle "$RUNNER_TEMP/gn-args.txt" dist
 
       - uses: actions/upload-artifact@v4
+        if: '!inputs.probe'
         with:
           name: angle-${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
 
   release:
-    if: inputs.release
+    if: inputs.release && !inputs.probe
     needs: [resolve, build]
     runs-on: ubuntu-22.04
     permissions:
