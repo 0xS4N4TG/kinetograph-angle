@@ -87,7 +87,7 @@ for rel in sorted(components, key=lambda r: (r == "", r)):
     out.append("=" * 78)
     if not files:
         missing.append(rel)
-        out.append("(no licence file in the source tree)")
+        out.append("(this directory carries no licence file of its own; the licence named above, if any, is from its README.chromium)")
     for n in files:
         out.append(f"--- {rel + '/' if rel else ''}{n}\n")
         out.append(open(os.path.join(src, rel, n), encoding="utf8", errors="replace").read().strip() + "\n")
