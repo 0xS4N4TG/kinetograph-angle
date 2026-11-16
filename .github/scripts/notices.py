@@ -1,25 +1,39 @@
 """Write THIRD-PARTY-NOTICES.txt: every third-party component the shipped libraries are built from, with its licence text.
 
-The components are the directories gn reports as dependencies of the shipped targets (gn desc <target> deps --all) that sit
-outside ANGLE's own code; each is resolved to the nearest directory (walking up) that carries a README.chromium or a
+The components are the directories (the targets' own and those of their source files, from gn's project description) that the shipped targets
+depend on; each is resolved to the nearest directory (walking up) that carries a README.chromium or a
 licence file. Usage: notices.py <angle checkout> <gn out dir> <output file> <gn target>..."""
-import os, re, subprocess, sys
+import json, os, re, subprocess, sys
 
 src, outdir, outfile, *targets = sys.argv[1:]
 B = ".bat" if sys.platform == "win32" else ""
 LICENSE_NAME = re.compile(r"^(licen[cs]e|copying|notice|unlicense)", re.I)
-SKIP = ("build", "build/config", "testing", "tools", "third_party/googletest", "buildtools/third_party/eu-strip")
+SKIP = ("out", "build", "build/config", "testing", "tools", "third_party/googletest", "buildtools/third_party/eu-strip")
 
-dirs = set()
-for t in targets:
-    r = subprocess.run(["gn" + B, "desc", outdir, t, "deps", "--all"], cwd=src, capture_output=True, text=True)
-    if r.returncode:
-        sys.exit(f"gn desc {t} failed:\n{r.stdout}{r.stderr}")
-    for line in r.stdout.splitlines():
-        m = re.match(r"\s*//([^:()\s]*)", line)
-        if m:
-            dirs.add(m.group(1))
-    dirs.add(re.match(r"//([^:]*)", t).group(1))
+r = subprocess.run(["gn" + B, "gen", outdir, "--ide=json"], cwd=src, capture_output=True, text=True)
+if r.returncode:
+    sys.exit(f"gn gen --ide=json failed:\n{r.stdout}{r.stderr}")
+graph = json.load(open(os.path.join(src, outdir, "project.json"), encoding="utf8"))["targets"]
+strip = lambda label: re.sub(r"\(.*\)$", "", label)
+by_label = {}
+for label, t in graph.items():
+    by_label.setdefault(strip(label), label)
+# Walk the dependencies of the shipped targets, not through programs run at build time (executables); a target contributes its
+# own directory and the directories of its source files.
+dirs, seen, todo = set(), set(), [by_label[t] for t in targets]
+while todo:
+    label = todo.pop()
+    if label in seen or label not in graph:
+        continue
+    seen.add(label)
+    t = graph[label]
+    if t["type"] == "executable":
+        continue
+    dirs.add(re.match(r"//([^:]*)", label).group(1))
+    for f in t.get("sources", []):
+        dirs.add(os.path.dirname(f[2:]))
+    todo.extend(t.get("deps", []))
+print(len(seen), "targets,", len(dirs), "directories")
 
 def readme(path):
     fields = {}
