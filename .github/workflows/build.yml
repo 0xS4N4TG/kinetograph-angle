@@ -1,6 +1,6 @@
 name: build
 
-# Builds libEGL and libGLESv2 from ANGLE (https://chromium.googlesource.com/angle/angle) for three platforms.
+# Builds libEGL, libGLESv2 and SwiftShader from ANGLE (https://chromium.googlesource.com/angle/angle) for three platforms.
 on:
   workflow_dispatch:
     inputs:
@@ -122,11 +122,26 @@ jobs:
 
       - name: Probe the build files
         if: inputs.probe
-        run: python3 ci/.github/scripts/probe.py work/angle out/Release
+        env:
+          OS_NAME: ${{ matrix.name }}
+        run: |
+          python3 ci/.github/scripts/probe.py work/angle out/Release
+          cd work/angle
+          t="//:libEGL //:libGLESv2 //third_party/SwiftShader/src/Vulkan:swiftshader_libvulkan"
+          [[ "$OS_NAME" == darwin-* ]] || t="$t //third_party/vulkan-loader/src:libvulkan"
+          python3 ../../ci/.github/scripts/notices.py . out/Release "$RUNNER_TEMP/notices.txt" $t
+          wc -c "$RUNNER_TEMP/notices.txt"; grep -A1 -E '^={78}$' "$RUNNER_TEMP/notices.txt" | grep -vE '^(=|--)' | head -80
 
-      - name: Build libEGL and libGLESv2
+      - name: Build libEGL, libGLESv2 and SwiftShader
         if: '!inputs.probe'
-        run: cd work/angle && autoninja$B -C out/Release libEGL libGLESv2
+        env:
+          OS_NAME: ${{ matrix.name }}
+        run: |
+          cd work/angle
+          targets="libEGL libGLESv2 third_party/SwiftShader/src/Vulkan:swiftshader_libvulkan third_party/SwiftShader/src/Vulkan:icd_file"
+          # macOS links the Vulkan loader statically; the other platforms ship it
+          [[ "$OS_NAME" == darwin-* ]] || targets="$targets third_party/vulkan-loader/src:libvulkan"
+          autoninja$B -C out/Release $targets
 
       - name: Package
         if: '!inputs.probe'
