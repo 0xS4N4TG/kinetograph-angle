@@ -12,6 +12,10 @@ on:
         description: Create a DRAFT release with the archives
         type: boolean
         default: false
+      revision:
+        description: Suffix for the release tag (angle-<sha10>-<revision>) when rebuilding a commit that already has a release
+        type: string
+        default: ''
       probe:
         description: Stop after gn gen and print what the build files say about SwiftShader and the Vulkan loader
         type: boolean
@@ -113,7 +117,7 @@ jobs:
           case "$OS_NAME" in
             darwin-*) extra='angle_enable_metal=true angle_enable_gl=false angle_enable_vulkan=true' ;;
             win32-*)  extra='angle_enable_d3d11=true angle_enable_d3d9=false angle_enable_gl=false angle_enable_vulkan=true' ;;
-            linux-*)  extra='angle_enable_vulkan=true angle_enable_gl=false use_ozone=false angle_use_x11=false angle_use_wayland=false' ;;
+            linux-*)  extra='angle_enable_vulkan=true angle_enable_gl=false use_ozone=false angle_use_x11=false angle_use_wayland=false angle_vulkan_display_mode="headless"' ;;
           esac
           args=$(echo $common $extra)
           echo "$args" > "$RUNNER_TEMP/gn-args.txt"
@@ -175,12 +179,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
           SHA: ${{ needs.resolve.outputs.sha }}
           REF: ${{ inputs.angle_ref }}
+          REVISION: ${{ inputs.revision }}
         run: |
           cd dist
           short="${SHA:0:10}"
+          tag="angle-$short${REVISION:+-$REVISION}"
           cat SHA256SUMS-* | sort -k2 > SHA256SUMS
           rm SHA256SUMS-*
           cat SHA256SUMS
-          gh release create "angle-$short" --draft --target "$GITHUB_SHA" \
-            --title "ANGLE $short" --notes "ANGLE $SHA (asked for: $REF). Built by this repository's build workflow." \
+          gh release create "$tag" --draft --target "$GITHUB_SHA" \
+            --title "ANGLE $short${REVISION:+ $REVISION}" --notes "ANGLE $SHA (asked for: $REF). Built by this repository's build workflow." \
             *.tar.gz *.zip SHA256SUMS
